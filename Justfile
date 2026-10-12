@@ -20,6 +20,12 @@ test:
 test-hast:
     go test ./internal/hastrt ./cmd/hast
 
+test-paseo-bridge:
+    go test ./internal/paseobridgert ./cmd/paseo-bridge
+
+paseo-bridge-spec-check:
+    PASEO_BRIDGE_SPEC_CHECK_URL="${PASEO_BRIDGE_SPEC_CHECK_URL:-https://paseo-bridge.kahub.in/api/v1/openapi.json}" go test -count=1 -run TestLiveSpec -v ./internal/paseobridgert
+
 build-hast: _validate-version
     @just build-archive hast "$(go env GOOS)" "$(go env GOARCH)"
     tar -xzf "{{ out_dir }}/hast_{{ version }}_$(go env GOOS)_$(go env GOARCH).tar.gz" -C "{{ out_dir }}" hast
@@ -39,6 +45,12 @@ release-build: _validate-version
     @just build-archive hast linux arm64
     @just build-archive hast darwin amd64
     @just build-archive hast darwin arm64
+    @just build-archive paseo-bridge linux amd64
+    @just build-archive paseo-bridge linux arm64
+    @just build-archive paseo-bridge darwin amd64
+    @just build-archive paseo-bridge darwin arm64
+    @just build-archive paseo-bridge windows amd64
+    @just build-archive paseo-bridge windows arm64
     @just release-checksums
     @echo "release artifacts in {{ out_dir }}"
     @ls -lh "{{ out_dir }}"
@@ -51,8 +63,8 @@ release-checksums: _validate-version
     set -euo pipefail
     cd "{{ out_dir }}"
     archive_count="$(find . -maxdepth 1 -type f \( -name '*_{{ version }}_*.tar.gz' -o -name '*_{{ version }}_*.zip' \) | wc -l)"
-    if [[ "$archive_count" -ne 10 ]]; then
-      echo "expected 10 release archives, found ${archive_count}" >&2
+    if [[ "$archive_count" -ne 16 ]]; then
+      echo "expected 16 release archives, found ${archive_count}" >&2
       exit 1
     fi
     sha256sum ./*_"{{ version }}"_*.tar.gz ./*_"{{ version }}"_*.zip > checksums.txt
@@ -75,7 +87,7 @@ _build-archive command goos goarch:
     if [[ "$goos" == "windows" ]]; then
       binary="${binary}.exe"
     fi
-    if [[ "$command" == "hast" ]]; then
+    if [[ "$command" == "hast" || "$command" == "paseo-bridge" ]]; then
       ldflags+=" -X main.version={{ version }} -X main.commit={{ commit }}"
     fi
 

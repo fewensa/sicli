@@ -15,6 +15,11 @@ var (
 )
 
 func main() {
+	if err := hastrt.MigrateLegacyConfig(); err != nil {
+		fmt.Fprintln(os.Stderr, hastrt.RedactSecrets(err.Error()))
+		os.Exit(1)
+	}
+
 	manager := hastrt.ContextManager()
 	selection, args, err := manager.ResolveArgs(os.Args)
 	if err != nil {

@@ -86,6 +86,7 @@ jobs:
         command:
           - sicli
           - hast
+          - paseo-bridge
         goos:
           - linux
           - darwin
