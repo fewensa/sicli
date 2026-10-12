@@ -1,0 +1,18 @@
+id: example
+name: Example Service
+status: template
+implementation:
+  type: go-command
+  package: ./cmd/example
+  command: example
+  transport: embedded-restish
+  api_description: https://api.example.com/openapi.json
+  api_description_format: openapi
+authentication:
+  supported: [access-token]
+safety:
+  write_mode_default: readonly
+notes:
+  - Add adapter code only when Restish cannot consume the upstream specification or authentication directly.
+openwiki:
+  notes: openwiki/decisions/service-cli-contract.md

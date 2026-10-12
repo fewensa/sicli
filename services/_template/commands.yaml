@@ -1,0 +1,15 @@
+surface:
+  source: https://api.example.com/openapi.json
+  generation: runtime
+  layout: tags
+  naming: upstream-operation-id
+support_commands:
+  namespace: example cli
+examples:
+  - name: example resources list-resources
+    mode: read
+write_policy:
+  environment: EXAMPLE_WRITE_MODE
+  default: readonly
+output:
+  owner: restish

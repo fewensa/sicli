@@ -1,0 +1,12 @@
+node_modules/
+npm-debug.log*
+.env
+
+bin/
+dist/
+internal/mcp2clirt/runtime.gz
+*.test
+coverage.out
+*.sha256
+/pingcode
+/pingcode.exe

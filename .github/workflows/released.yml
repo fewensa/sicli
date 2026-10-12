@@ -1,0 +1,191 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      tag_exists: ${{ steps.release.outputs.tag_exists }}
+      version: ${{ steps.release.outputs.version }}
+      commit: ${{ steps.release.outputs.commit }}
+      short_commit: ${{ steps.release.outputs.short_commit }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_TAG: ${{ github.ref_name }}
+          MANUAL_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            tag="$PUSH_TAG"
+          else
+            tag="$MANUAL_TAG"
+          fi
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tag must be a semantic version beginning with v: $tag" >&2
+            exit 64
+          fi
+
+          tag_exists=false
+          if git rev-parse --verify --quiet "refs/tags/${tag}^{commit}" >/dev/null; then
+            git checkout --detach "$tag"
+            tag_exists=true
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "tag_exists=$tag_exists" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "short_commit=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+
+          version="${tag#v}"
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build ${{ matrix.command }} for ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        command:
+          - sicli
+          - hast
+        goos:
+          - linux
+          - darwin
+          - windows
+        goarch:
+          - amd64
+          - arm64
+        exclude:
+          - command: hast
+            goos: windows
+            goarch: amd64
+          - command: hast
+            goos: windows
+            goarch: arm64
+
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up just
+        uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
+
+      - name: Build release archive
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          COMMIT: ${{ needs.prepare.outputs.short_commit }}
+        run: just build-archive "${{ matrix.command }}" "${{ matrix.goos }}" "${{ matrix.goarch }}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.command }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  release:
+    name: Publish GitHub Release
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+
+      - name: Set up just
+        uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: just release-checksums
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          TAG_EXISTS: ${{ needs.prepare.outputs.tag_exists }}
+          COMMIT: ${{ needs.prepare.outputs.commit }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          create_flags=(--title "$TAG" --generate-notes)
+          if [[ "$PRERELEASE" == "true" ]]; then
+            create_flags+=(--prerelease)
+          fi
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            if [[ "$TAG_EXISTS" == "true" ]]; then
+              gh release create "$TAG" --verify-tag "${create_flags[@]}"
+            else
+              gh release create "$TAG" --target "$COMMIT" "${create_flags[@]}"
+            fi
+          fi
+          if [[ "$PRERELEASE" == "true" ]]; then
+            gh release edit "$TAG" --prerelease --latest=false
+          else
+            gh release edit "$TAG" --prerelease=false
+          fi
+          gh release upload "$TAG" \
+            ./dist/*.tar.gz \
+            ./dist/*.zip \
+            ./dist/checksums.txt \
+            --clobber
